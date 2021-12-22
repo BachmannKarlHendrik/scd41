@@ -11,8 +11,9 @@ const char* password = WIFIPASS;
 const char* url = URL; //Endpoint server
 const char* tenant = TENANT;
 const char* passwordiot = IOTPASS;
-String clientId = "KarliESP-SCD41-2";
+String clientId = "KarliESP-SCD41-1";
 String command = "";
+unsigned long lastMsg = 0;
 
 
 WiFiClient wifiClient;
@@ -112,48 +113,52 @@ void loop() {
   }
 
   mqttClient.loop();
-  
-  float co2, temperature, humidity;
-  uint8_t data[12], counter;
 
-  // send read data command
-  Wire.beginTransmission(SCD_ADDRESS);
-  Wire.write(0xec);
-  Wire.write(0x05);
-  Wire.endTransmission();
+    unsigned long now = millis();
+  if (now - lastMsg > 5000) { // Wait 5 seconds between every request
+    lastMsg = now;
   
-  // read measurement data: 2 bytes co2, 1 byte CRC,
-  // 2 bytes T, 1 byte CRC, 2 bytes RH, 1 byte CRC,
-  // 2 bytes sensor status, 1 byte CRC
-  // stop reading after 12 bytes (not used)
-  // other data like  ASC not included
-  Wire.requestFrom(SCD_ADDRESS, 12);
-  counter = 0;
-  while (Wire.available()) {
-    data[counter++] = Wire.read();
+    float co2, temperature, humidity;
+    uint8_t data[12], counter;
+
+    // send read data command
+    Wire.beginTransmission(SCD_ADDRESS);
+    Wire.write(0xec);
+    Wire.write(0x05);
+    Wire.endTransmission();
+    
+    // read measurement data: 2 bytes co2, 1 byte CRC,
+    // 2 bytes T, 1 byte CRC, 2 bytes RH, 1 byte CRC,
+    // 2 bytes sensor status, 1 byte CRC
+    // stop reading after 12 bytes (not used)
+    // other data like  ASC not included
+    Wire.requestFrom(SCD_ADDRESS, 12);
+
+    counter = 0;
+    while (Wire.available()) {
+      data[counter++] = Wire.read();
+    }
+    
+    // floating point conversion according to datasheet
+    co2 = (float)((uint16_t)data[0] << 8 | data[1]);
+    // convert T in degC
+    temperature = -45 + 175 * (float)((uint16_t)data[3] << 8 | data[4]) / 65536;
+    // convert RH in %
+    humidity = 100 * (float)((uint16_t)data[6] << 8 | data[7]) / 65536;
+
+    Serial.print(co2);
+    Serial.print("\t");
+    Serial.print(temperature);
+    Serial.print("\t");
+    Serial.print(humidity);
+    Serial.println();
+
+    command = "200,co2Measurement,particles per million,"+String(co2)+",ppm";
+    mqttClient.publish("s/us", (char*) command.c_str());
+    command = "211,"+String(temperature);
+    mqttClient.publish("s/us", (char*) command.c_str());
+    command = "200,humidityMeasurement,percent,"+String(humidity)+",%";
+    mqttClient.publish("s/us", (char*) command.c_str());
+  
   }
-  
-  // floating point conversion according to datasheet
-  co2 = (float)((uint16_t)data[0] << 8 | data[1]);
-  // convert T in degC
-  temperature = -45 + 175 * (float)((uint16_t)data[3] << 8 | data[4]) / 65536;
-  // convert RH in %
-  humidity = 100 * (float)((uint16_t)data[6] << 8 | data[7]) / 65536;
-
-  Serial.print(co2);
-  Serial.print("\t");
-  Serial.print(temperature);
-  Serial.print("\t");
-  Serial.print(humidity);
-  Serial.println();
-
-  command = "200,co2Measurement,particles per million,"+String(co2)+",ppm";
-  mqttClient.publish("s/us", (char*) command.c_str());
-  command = "211,"+String(temperature);
-  mqttClient.publish("s/us", (char*) command.c_str());
-  command = "200,humidityMeasurement,percent,"+String(humidity)+",%";
-  mqttClient.publish("s/us", (char*) command.c_str());
-
-  // wait 2 s for next measurement
-  delay(5000);
 }
